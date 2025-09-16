@@ -1,26 +1,19 @@
-# Ticket.py
-# -*- coding: utf-8 -*-
-
 import os
 from io import BytesIO
 from typing import Optional, Dict, List
 from datetime import datetime
 
-import aiohttp  # pour les webhooks
+import aiohttp
 import discord
 from discord.ext import commands
 from discord import app_commands
 
-# =========================
-# 🔧 CONFIG
-# =========================
-GUILD_ID = int(os.getenv("GUILDID", 0))           # ta guilde
-LOGS_CHANNEL_ID = 1406806852536107088             # salon logs (fallback)
-TICKET_LOGS_WEBHOOK_URL = os.getenv("TICKET_LOGS_WEBHOOK_URL", "")  # URL webhook logs
+GUILD_ID = int(os.getenv("GUILDID", 0))
+LOGS_CHANNEL_ID = 1406806852536107088
+TICKET_LOGS_WEBHOOK_URL = os.getenv("TICKET_LOGS_WEBHOOK_URL", "")
 
-CUSTOM_EMOJI_ID = 1398652125180854382             # emoji perso (ID)
+CUSTOM_EMOJI_ID = 1398652125180854382
 
-# Catégories par type de ticket (remplace les 0 par tes vraies catégories)
 TICKET_CATEGORIES: Dict[str, int] = {
     "Plainte": 1406833167385624646,
     "Question": 0,
@@ -30,11 +23,10 @@ TICKET_CATEGORIES: Dict[str, int] = {
     "Autre": 0,
 }
 
-ROLE_TO_PING: Optional[int] = None   # ex: 123456789012345678 ou None
-BANNER_URL: Optional[str] = None     # image en haut de l'embed, ou None
+ROLE_TO_PING: Optional[int] = None
+BANNER_URL: Optional[str] = None
 EMBED_COLOR = discord.Color.dark_grey()
 
-# Options du menu
 REASON_OPTIONS = [
     ("Plainte", "Problème / plainte / restitution", "📣"),
     ("Question", "Question générale / aide", "❓"),
@@ -44,27 +36,19 @@ REASON_OPTIONS = [
     ("Autre", "Autre demande", "🗂️"),
 ]
 
-# =========================
-# 🧠 États en mémoire
-# =========================
 class TicketState:
     def __init__(self, user_id: int, channel_id: int, reason: str):
         self.user_id = user_id
         self.channel_id = channel_id
         self.reason = reason
-        # Chaque entrée : {"by": str, "content": str, "ts": datetime, "internal": bool, "is_attachment": bool}
         self.transcript: List[dict] = []
         self.opened_at = datetime.utcnow()
 
 ACTIVE_TICKETS: Dict[int, TicketState] = {}
 CHANNEL_TO_USER: Dict[int, int] = {}
 
-# Historique global des commentaires (par joueur)
-USER_COMMENTS: Dict[int, List[dict]] = {}  # {user_id: [{"by": str, "content": str, "ts": datetime, "channel_id": int}]}
+USER_COMMENTS: Dict[int, List[dict]] = {}
 
-# =========================
-# 🛠️ Helpers
-# =========================
 def get_emoji_markup(bot: commands.Bot, guild: Optional[discord.Guild], emoji_id: int) -> str:
     if not emoji_id:
         return ""
@@ -106,21 +90,11 @@ def build_comments_embed(user_id: int, guild: Optional[discord.Guild], limit: in
     embed.set_footer(text="Commentaires ajoutés via /commentaire (notes internes)")
     return embed
 
-# =========================
-# 📨 Logs via Webhook — MONO-MESSAGE
-# =========================
 async def send_logs_via_webhook(bot: commands.Bot,
                                 state: TicketState,
                                 user: Optional[discord.User],
                                 guild: discord.Guild,
                                 channel: discord.TextChannel):
-    """
-    Envoie le transcript dans UN SEUL message :
-      - 1 embed (description = transcript en bloc code)
-      - si trop long, embed tronqué + pièce jointe .txt (toujours un seul message)
-    Fallback: même logique dans LOGS_CHANNEL_ID.
-    """
-    # Construire le transcript (texte brut)
     lines: list[str] = []
     for m in state.transcript:
         ts = m["ts"].strftime("%Y-%m-%d %H:%M:%S")
@@ -134,7 +108,7 @@ async def send_logs_via_webhook(bot: commands.Bot,
 
     full_text_only = "\n".join(lines)
     embed_body_full = f"```txt\n{full_text_only}\n```"
-    MAX_DESC = 4000  # marge sous 4096
+    MAX_DESC = 4000
 
     def build_embed(desc: str, truncated: bool) -> discord.Embed:
         e = discord.Embed(
@@ -156,7 +130,6 @@ async def send_logs_via_webhook(bot: commands.Bot,
     if len(embed_body_full) <= MAX_DESC:
         embed = build_embed(embed_body_full, truncated=False)
     else:
-        # Tronquer en respectant les lignes
         used, acc = 0, []
         for line in (full_text_only + "\n").splitlines(True):
             if used + len(line) > MAX_DESC - 50:
@@ -167,7 +140,6 @@ async def send_logs_via_webhook(bot: commands.Bot,
         truncated_body = "".join(acc).rstrip() + f"\n… (+{remaining_lines} lignes masquées)"
         embed = build_embed(f"```txt\n{truncated_body}\n```", truncated=True)
 
-        # Joindre le .txt complet
         buf = BytesIO()
         header = (
             f"Transcript Ticket — {guild.name}\n"
@@ -208,9 +180,6 @@ async def send_logs_via_webhook(bot: commands.Bot,
     else:
         await _fallback_to_channel()
 
-# =========================
-# 🧩 UI Discord (Views / Modals)
-# =========================
 class ReasonModal(discord.ui.Modal, title="Ouvrir un ticket"):
     def __init__(self, reason_label: str):
         super().__init__()
@@ -228,7 +197,6 @@ class ReasonModal(discord.ui.Modal, title="Ouvrir un ticket"):
         reason = self.reason_label
         detail = self.raison.value.strip()
 
-        # Anti-doublon : un ticket à la fois par joueur
         existing = ACTIVE_TICKETS.get(interaction.user.id)
         if existing:
             existing_ch = interaction.guild.get_channel(existing.channel_id) if interaction.guild else None
@@ -266,10 +234,8 @@ class ReasonModal(discord.ui.Modal, title="Ouvrir un ticket"):
         ACTIVE_TICKETS[interaction.user.id] = state
         CHANNEL_TO_USER[ch.id] = interaction.user.id
 
-        # Emoji dynamique
         emoji_str = get_emoji_markup(interaction.client, interaction.guild, CUSTOM_EMOJI_ID)
 
-        # Message d'ouverture côté staff
         view = TicketAdminView()
         await ch.send(
             f"{emoji_str + ' ' if emoji_str else ''}**Nouveau ticket** — {interaction.user.mention}\n"
@@ -278,12 +244,10 @@ class ReasonModal(discord.ui.Modal, title="Ouvrir un ticket"):
             view=view
         )
 
-        # Récap des commentaires historiques pour ce joueur
         recap = build_comments_embed(interaction.user.id, interaction.guild, limit=10)
         if recap:
             await ch.send(embed=recap)
 
-        # ---------- DM joueur (EN EMBED) ----------
         try:
             dm_embed = discord.Embed(
                 title="✅ Ticket créé",
@@ -302,7 +266,6 @@ class ReasonModal(discord.ui.Modal, title="Ouvrir un ticket"):
 
         await interaction.response.send_message("✅ Ticket créé. Vérifie tes DM.", ephemeral=True)
 
-
 class ReasonSelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -315,12 +278,10 @@ class ReasonSelect(discord.ui.Select):
         choice = self.values[0]
         await interaction.response.send_modal(ReasonModal(choice))
 
-
 class TicketOpenView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(ReasonSelect())
-
 
 class TicketAdminView(discord.ui.View):
     def __init__(self):
@@ -335,13 +296,11 @@ class TicketAdminView(discord.ui.View):
         state = ACTIVE_TICKETS.get(user_id)
         user = interaction.client.get_user(user_id) or await interaction.client.fetch_user(user_id)
 
-        # Envoi des logs via webhook (mono-message)
         try:
-            await send_logs_via_webhook(interaction.client, state, user, interaction.guild, interaction.channel)  # type: ignore
+            await send_logs_via_webhook(interaction.client, state, user, interaction.guild, interaction.channel)
         except Exception:
             pass
 
-        # ---------- DM de clôture (EN EMBED) ----------
         if user:
             try:
                 dm_close = discord.Embed(
@@ -357,19 +316,14 @@ class TicketAdminView(discord.ui.View):
             except discord.Forbidden:
                 pass
 
-        # Nettoyage
         ACTIVE_TICKETS.pop(user_id, None)
         CHANNEL_TO_USER.pop(interaction.channel.id, None)
         await interaction.channel.delete(reason="Ticket fermé")
 
-# =========================
-# 🧩 Cog principal
-# =========================
 class Ticket(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # Commande texte admin pour poster le panneau
     @commands.command(name="ticket")
     @commands.has_permissions(administrator=True)
     async def ticket_panel(self, ctx: commands.Context):
@@ -382,7 +336,6 @@ class Ticket(commands.Cog):
         embed.set_footer(text=f"{ctx.guild.name} • {datetime.utcnow().strftime('%d/%m/%Y %H:%M UTC')}")
         await ctx.send(embed=embed, view=TicketOpenView())
 
-    # Slash command guild-only (ajout de note interne)
     @app_commands.command(name="commentaire", description="Ajoute un commentaire interne au ticket (non envoyé au joueur).")
     @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.guilds(discord.Object(id=GUILD_ID))
@@ -416,13 +369,11 @@ class Ticket(commands.Cog):
         await interaction.response.send_message("📝 Commentaire ajouté (note interne liée au joueur).", ephemeral=True)
         await interaction.channel.send(f"📝 **Note interne par {interaction.user.mention}** : {texte}")
 
-    # -------- Relais messages DM <-> salon --------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
 
-        # Joueur -> DM au bot
         if isinstance(message.channel, discord.DMChannel):
             state = ACTIVE_TICKETS.get(message.author.id)
             if not state:
@@ -434,7 +385,6 @@ class Ticket(commands.Cog):
             if not isinstance(ch, discord.TextChannel):
                 return
 
-            # texte
             if message.content:
                 state.transcript.append({
                     "by": str(message.author),
@@ -445,7 +395,6 @@ class Ticket(commands.Cog):
                 })
                 await ch.send(f"**{message.author} (joueur)** : {message.content}")
 
-            # pièces jointes
             for att in message.attachments:
                 state.transcript.append({
                     "by": str(message.author),
@@ -456,7 +405,6 @@ class Ticket(commands.Cog):
                 })
                 await ch.send(att.url)
 
-        # Staff -> salon ticket
         elif isinstance(message.channel, discord.TextChannel):
             user_id = CHANNEL_TO_USER.get(message.channel.id)
             if not user_id:
@@ -469,7 +417,6 @@ class Ticket(commands.Cog):
             if not user or not state:
                 return
 
-            # texte
             if message.content:
                 state.transcript.append({
                     "by": f"{message.author} (staff)",
@@ -483,7 +430,6 @@ class Ticket(commands.Cog):
                 except discord.Forbidden:
                     await message.channel.send("⚠️ Impossible d’envoyer un DM au joueur (MP fermés).")
 
-            # pièces jointes
             for att in message.attachments:
                 state.transcript.append({
                     "by": f"{message.author} (staff)",
@@ -496,11 +442,9 @@ class Ticket(commands.Cog):
                     await user.send(att.url)
                 except discord.Forbidden:
                     pass
-                # inutile de renvoyer l'URL dans le salon (le message original a déjà la pièce jointe)
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # Vues persistantes
         try:
             self.bot.add_view(TicketOpenView())
             self.bot.add_view(TicketAdminView())
