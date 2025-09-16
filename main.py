@@ -46,7 +46,7 @@ async def update_status_periodically():
         guild = bot.get_guild(GUILD_ID)
         if guild is not None:
             member_count = guild.member_count
-            await bot.change_presence(activity=discord.CustomActivity(name=f'👹 Joue à Atlas|Demon Slayer Rp'))
+            await bot.change_presence(activity=discord.CustomActivity(name=f'👹 Joue à Atlas | Demon Slayer Rp'))
         else:
             print(f"Impossible de trouver la guilde avec l'ID {GUILD_ID}.")
         await asyncio.sleep(60)
